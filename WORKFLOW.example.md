@@ -70,7 +70,7 @@ claude:
   # (no send/post). Trade-off: this also loads your other user MCP servers and
   # global settings, so it is a bit heavier. To run lean/codebase-only, drop
   # `--setting-sources user` and the mcp__claude_ai_Slack__* entries.
-  command: claude -p --model {{ model }} --setting-sources user --permission-mode default --allowedTools Read,Grep,Glob,Write,mcp__claude_ai_Slack__slack_search_public,mcp__claude_ai_Slack__slack_search_public_and_private,mcp__claude_ai_Slack__slack_read_thread,mcp__claude_ai_Slack__slack_read_channel,mcp__claude_ai_Slack__slack_read_user_profile,mcp__claude_ai_Slack__slack_search_users,mcp__claude_ai_Notion__notion-search,mcp__claude_ai_Notion__notion-fetch --output-format stream-json --verbose
+  command: claude -p --model {{ model }} --setting-sources user --permission-mode default --allowedTools Read,Grep,Glob,Write,mcp__claude_ai_Slack__slack_search_public,mcp__claude_ai_Slack__slack_search_public_and_private,mcp__claude_ai_Slack__slack_read_thread,mcp__claude_ai_Slack__slack_read_channel,mcp__claude_ai_Slack__slack_read_user_profile,mcp__claude_ai_Slack__slack_search_users,mcp__claude_ai_Notion__notion-search,mcp__claude_ai_Notion__notion-fetch,WebSearch,WebFetch --output-format stream-json --verbose
 
 hooks:
   timeout_ms: 120000
@@ -104,16 +104,22 @@ You are answering a question about the codebase. Linear issue {{ issue.identifie
 Question:
 {{ issue.description }}
 
-FIRST decide what the question is really about, and pick the right source:
-- **Code question** (how/where something is implemented, behavior of the code) → ground in the codebase.
-- **Context question** (who/why, ownership, decision, policy, process, history — things the code does NOT reveal) → ground in the wiki, Slack, and Notion. Do NOT force a code answer for a context question.
+Answer with EVIDENCE — and note that many questions need BOTH the situation AND the concrete "how". Work in this order:
 
-You have read-only evidence sources:
-1. Codebases under ./codebase/ — `your-ios-repo`, `your-android-repo` (use for code questions).
-2. Obsidian wiki at ./wiki (if present) — curated decisions/rules/context. IGNORE the ./wiki/_inbox/ folder (unreviewed drafts).
-3. **Slack & Notion (read-only)** — for decisions, ownership, process, history, and anything not in code. **Proactively SEARCH Slack and Notion** when the question is a context question OR when the code does not fully answer it — do NOT wait for an explicit link. If a specific Slack thread / Notion page is referenced, read it directly. Cite the source (channel/thread, note/page title). Never post or modify anything.
+1. **Understand the situation/intent first.** If the issue points at a Slack thread, a topic, or a decision, read Slack (and Notion) to grasp what is actually being asked and its context — don't answer from a guess.
+2. **Then give an ACTIONABLE answer, not just a summary:**
+   - Concerns our code → find the exact **API / file:line** under ./codebase/.
+   - Concerns an external service (CI, analytics, a 3rd-party API/tool, etc.) → identify the **specific API/endpoint or concrete steps**; use **web search** to confirm external API details.
+   - Pure who/why/decision/ownership → answer from Slack/Notion/wiki.
+   Do NOT stop at summarizing Slack when the question implies "how / which API / what to do" — carry the context through to a concrete answer.
 
-Search the sources that match the question type. When sources disagree, note the discrepancy. If you genuinely cannot find supporting evidence, say so explicitly — do NOT fill the gap with an unrelated code answer.
+Read-only evidence sources:
+1. Codebases under ./codebase/ — `your-ios-repo`, `your-android-repo`.
+2. Obsidian wiki at ./wiki (if present) — curated decisions/rules. IGNORE the ./wiki/_inbox/ folder (drafts).
+3. **Slack & Notion (read-only)** — decisions, ownership, process, history, intent. **Proactively SEARCH** them (don't wait for an explicit link); read a referenced thread/page directly. Never post or modify anything.
+4. **Web search** — for external/3rd-party APIs, tools, and docs the codebase doesn't contain.
+
+Cite sources (file:line, note/page title, Slack channel/thread, URL). When sources disagree, note it. If you genuinely cannot find evidence, say so — do NOT invent.
 
 Rules:
 - READ-ONLY. Do NOT modify, create (except answer.md), or delete any source file
