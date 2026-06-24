@@ -9,6 +9,10 @@ tracker:
     - Todo
     - In Progress
   poll_interval_sec: 10
+  # Auto-reopen: if a completed issue is moved back to an active state, re-dispatch
+  # it this many seconds after completion (grace covers the done-state propagation
+  # lag). Default 30. No restart needed — just move the issue back to Todo.
+  reopen_grace_sec: 30
   # Set true to also post the produced answer.md back to the issue as a Linear
   # comment when it completes. Default false (answer stays local). The orchestrator
   # never creates PRs or edits the issue body — only this optional comment.

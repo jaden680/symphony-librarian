@@ -31,6 +31,7 @@ interface FakeServer {
   getIssueState(): string;
   getComment(): string | null;
   getTransitions(): string[];
+  reopen(): void;
 }
 
 function startFakeLinear(): Promise<FakeServer> {
@@ -142,6 +143,9 @@ function startFakeLinear(): Promise<FakeServer> {
         getIssueState: () => issue.state,
         getComment: () => commentBody,
         getTransitions: () => transitions,
+        reopen: () => {
+          issue.state = 'Todo';
+        },
       });
     });
   });
@@ -243,6 +247,7 @@ tracker:
     - Todo
     - In Progress
   poll_interval_sec: 1
+  reopen_grace_sec: 1
   post_answer_comment: true
 workspace:
   root: ${workspacesDir}
@@ -297,6 +302,15 @@ Search the codebase and ./wiki (if present). Write your answer to answer.md.
       fs.existsSync(draftNote), // in-process drain wrote the curated note
     25_000,
   );
+
+  // --- auto-reopen: move ZZ-1 back to Todo, expect a second dispatch ---
+  const dispatchCount = () =>
+    records.filter((r) => r.event === 'worker_dispatched' && r.issue_identifier === 'ZZ-1').length;
+  const firstCount = dispatchCount();
+  const stateBeforeReopen = fake.getIssueState(); // 'Done' from the first completion
+  fake.reopen();
+  const reopened = await waitFor(() => dispatchCount() > firstCount, 15_000);
+
   orchestrator.stop();
   await new Promise<void>((r) => fake.server.close(() => r()));
 
@@ -320,7 +334,7 @@ Search the codebase and ./wiki (if present). Write your answer to answer.md.
     'expected a read-only wiki symlink in the workspace',
   );
   check(fake.getMovedStateId() === 's-done', `expected issue moved to Done state id (got ${fake.getMovedStateId()})`);
-  check(fake.getIssueState() === 'Done', `expected fake issue state to be Done (got ${fake.getIssueState()})`);
+  check(stateBeforeReopen === 'Done', `expected fake issue Done after first completion (got ${stateBeforeReopen})`);
   // start_state: Todo -> In Progress on start, then -> Done, in that order.
   const tr = fake.getTransitions();
   check(tr.includes('In Progress'), `expected a start transition to In Progress (got ${JSON.stringify(tr)})`);
@@ -334,6 +348,9 @@ Search the codebase and ./wiki (if present). Write your answer to answer.md.
     'blocked issue ZZ-2 must not be dispatched',
   );
   check(!fs.existsSync(path.join(workspacesDir, 'ZZ-2')), 'blocked issue ZZ-2 must not get a workspace');
+  // auto-reopen: moving a completed issue back to an active state re-dispatches it.
+  check(reopened, 'expected ZZ-1 to be re-dispatched after being moved back to Todo');
+  check(has('issue_reopened'), 'expected an issue_reopened event');
   // v2: the answer's gap was auto-enqueued into the curation queue.
   check(has('gap_enqueued'), 'expected the answer gap to be auto-enqueued (gap_enqueued)');
   const queueFile = path.join(tmp, '.symphony/curation_queue.jsonl');

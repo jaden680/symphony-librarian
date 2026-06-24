@@ -15,6 +15,8 @@ export interface EffectiveConfig {
     terminalStates: string[];
     requiredLabels: string[];
     pollIntervalMs: number;
+    /** Grace (ms) after completion before a re-activated issue is re-dispatched. */
+    reopenGraceMs: number;
     /** When true, post answer.md back to the issue as a Linear comment on completion. */
     postAnswerComment: boolean;
   };

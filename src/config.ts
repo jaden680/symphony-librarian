@@ -166,6 +166,7 @@ export function loadConfig(workflowPath: string): EffectiveConfig {
       terminalStates: asStringList(tracker.terminal_states, DEFAULTS.terminalStates),
       requiredLabels: asStringList(tracker.required_labels, []).map((l) => l.toLowerCase()),
       pollIntervalMs,
+      reopenGraceMs: Math.max(0, asInt(tracker.reopen_grace_sec, 30)) * 1000,
       postAnswerComment: asBool(tracker.post_answer_comment, false),
     },
     workspace: { root: workspaceRoot },

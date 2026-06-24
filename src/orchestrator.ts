@@ -36,6 +36,7 @@ export class Orchestrator {
   private readonly processed = new Set<string>(); // moved to done this session
   private readonly givenUp = new Set<string>(); // exhausted attempts this session
   private readonly cancelRequested = new Set<string>(); // became terminal externally
+  private readonly completedAt = new Map<string, number>(); // id -> done time (for auto-reopen)
 
   private client!: LinearClient;
   private clientSig = '';
@@ -182,8 +183,17 @@ export class Orchestrator {
 
   private isEligible(issue: Issue, terminalStates: string[], requiredLabels: string[]): boolean {
     if (this.workers.has(issue.id)) return false;
-    if (this.processed.has(issue.id)) return false;
     if (this.givenUp.has(issue.id)) return false;
+    if (this.processed.has(issue.id)) {
+      // Auto-reopen: a completed issue is a candidate again ⇒ it was moved back to
+      // an active state by a human. After the grace window (covers the brief lag
+      // before the done transition propagates), clear it and let it run again.
+      const since = Date.now() - (this.completedAt.get(issue.id) ?? 0);
+      if (since < this.store.current.tracker.reopenGraceMs) return false;
+      this.processed.delete(issue.id);
+      this.completedAt.delete(issue.id);
+      this.logger.child({ issue_id: issue.id, issue_identifier: issue.identifier }).info('issue_reopened', {});
+    }
     const term = new Set(terminalStates.map(lower));
     if (term.has(lower(issue.state))) return false;
     for (const label of requiredLabels) {
@@ -391,18 +401,21 @@ export class Orchestrator {
     // Move the issue to done_state (orchestrator-owned transition for this build).
     const doneStateId = this.resolveStateId(cfg.tracker.doneState);
     if (!doneStateId) {
+      // Not cleanly completed → give up (not auto-reopenable, avoids a re-dispatch loop).
       log.error('done_state_not_found', { done_state: cfg.tracker.doneState });
-      this.processed.add(issue.id);
+      this.givenUp.add(issue.id);
       return;
     }
     try {
       await this.client.moveIssueToState(issue.id, doneStateId);
       log.info('issue_transitioned', { to_state: cfg.tracker.doneState });
+      // Cleanly done → eligible for auto-reopen if moved back to an active state.
+      this.processed.add(issue.id);
+      this.completedAt.set(issue.id, Date.now());
     } catch (err) {
       const le = err as LinearError;
       log.error('tracker_transition_failed', { error: le.message, category: le.category ?? 'unknown' });
-    } finally {
-      this.processed.add(issue.id);
+      this.givenUp.add(issue.id);
     }
   }
 
