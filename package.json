@@ -1,0 +1,30 @@
+{
+  "name": "symphony-orchestrator",
+  "version": "0.1.0",
+  "description": "Symphony orchestrator — read-only codebase + Obsidian wiki Q&A. Watches a Linear board and answers question issues via the Claude Code CLI, producing answer.md (no PR).",
+  "license": "MIT",
+  "type": "commonjs",
+  "bin": {
+    "symphony": "dist/cli.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "rm -rf dist",
+    "start": "node dist/cli.js --workflow WORKFLOW.md",
+    "dev": "npm run build && npm run start",
+    "test:e2e": "npm run build && node dist/test/e2e.js",
+    "curate": "npm run build && node dist/librarian/cli.js --librarian LIBRARIAN.md",
+    "test:unit": "npm run build && node --test dist/test/librarian/*.test.js",
+    "test:librarian-e2e": "npm run build && node dist/test/librarian-e2e.js"
+  },
+  "dependencies": {
+    "yaml": "^2.5.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.0",
+    "typescript": "^5.6.3"
+  }
+}

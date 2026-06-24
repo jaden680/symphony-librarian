@@ -1,0 +1,12 @@
+node_modules/
+dist/
+symphony_workspaces/
+.symphony/
+*.log
+.DS_Store
+# never commit local answers
+symphony_answers/
+
+# personal configs (use the *.example.md templates)
+WORKFLOW.md
+LIBRARIAN.md
