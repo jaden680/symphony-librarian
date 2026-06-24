@@ -66,7 +66,7 @@ claude:
   # (no send/post). Trade-off: this also loads your other user MCP servers and
   # global settings, so it is a bit heavier. To run lean/codebase-only, drop
   # `--setting-sources user` and the mcp__claude_ai_Slack__* entries.
-  command: claude -p --model {{ model }} --setting-sources user --permission-mode default --allowedTools Read,Grep,Glob,Write,mcp__claude_ai_Slack__slack_search_public,mcp__claude_ai_Slack__slack_search_public_and_private,mcp__claude_ai_Slack__slack_read_thread,mcp__claude_ai_Slack__slack_read_channel,mcp__claude_ai_Slack__slack_read_user_profile,mcp__claude_ai_Slack__slack_search_users --output-format stream-json --verbose
+  command: claude -p --model {{ model }} --setting-sources user --permission-mode default --allowedTools Read,Grep,Glob,Write,mcp__claude_ai_Slack__slack_search_public,mcp__claude_ai_Slack__slack_search_public_and_private,mcp__claude_ai_Slack__slack_read_thread,mcp__claude_ai_Slack__slack_read_channel,mcp__claude_ai_Slack__slack_read_user_profile,mcp__claude_ai_Slack__slack_search_users,mcp__claude_ai_Notion__notion-search,mcp__claude_ai_Notion__notion-fetch --output-format stream-json --verbose
 
 hooks:
   timeout_ms: 120000
@@ -100,18 +100,16 @@ You are answering a question about the codebase. Linear issue {{ issue.identifie
 Question:
 {{ issue.description }}
 
+FIRST decide what the question is really about, and pick the right source:
+- **Code question** (how/where something is implemented, behavior of the code) → ground in the codebase.
+- **Context question** (who/why, ownership, decision, policy, process, history — things the code does NOT reveal) → ground in the wiki, Slack, and Notion. Do NOT force a code answer for a context question.
+
 You have read-only evidence sources:
-1. The codebases under ./codebase/ — `your-ios-repo` and `your-android-repo` (source files).
-2. (If present) The Obsidian wiki vault at ./wiki — markdown notes holding
-   historical decisions, hidden business rules, and context the code alone does
-   not reveal. IGNORE the ./wiki/_inbox/ folder (unreviewed drafts). If ./wiki
-   does not exist, rely on the codebase only.
-3. Slack (read-only): if this issue's description references a Slack thread or URL
-   (e.g. a slack.com/archives/... link, or a channel/thread mention), use the
-   Slack tools to read that thread/channel and use its content as evidence. Cite
-   the Slack channel + thread. Do NOT post or send anything to Slack.
-Search the relevant codebase under ./codebase/, the wiki if present, and any Slack
-thread referenced by the issue. When sources disagree, note the discrepancy.
+1. Codebases under ./codebase/ — `your-ios-repo`, `your-android-repo` (use for code questions).
+2. Obsidian wiki at ./wiki (if present) — curated decisions/rules/context. IGNORE the ./wiki/_inbox/ folder (unreviewed drafts).
+3. **Slack & Notion (read-only)** — for decisions, ownership, process, history, and anything not in code. **Proactively SEARCH Slack and Notion** when the question is a context question OR when the code does not fully answer it — do NOT wait for an explicit link. If a specific Slack thread / Notion page is referenced, read it directly. Cite the source (channel/thread, note/page title). Never post or modify anything.
+
+Search the sources that match the question type. When sources disagree, note the discrepancy. If you genuinely cannot find supporting evidence, say so explicitly — do NOT fill the gap with an unrelated code answer.
 
 Rules:
 - READ-ONLY. Do NOT modify, create (except answer.md), or delete any source file
