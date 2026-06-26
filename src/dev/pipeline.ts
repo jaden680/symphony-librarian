@@ -68,8 +68,8 @@ export async function runDevPipeline(opts: DevPipelineOpts): Promise<DevResult> 
 
   // --- worktree ---
   try {
-    const { created } = ensureWorktree(repo.path, worktreePath, branch, base);
-    log.info('dev_worktree_ready', { worktree: worktreePath, branch, base, created });
+    const { created, startPoint } = ensureWorktree(repo.path, worktreePath, branch, base);
+    log.info('dev_worktree_ready', { worktree: worktreePath, branch, base, start_point: startPoint, created });
   } catch (err) {
     return { ok: false, reason: `worktree_failed: ${(err as Error).message}` };
   }

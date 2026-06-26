@@ -17,7 +17,7 @@ repos:
   - name: your-ios-repo
     path: /path/to/your-ios-repo      # absolute path to the local git checkout
     labels: [ios]
-    base: ''                          # base branch; empty = the repo's default (origin/HEAD)
+    base: develop                     # base branch (e.g. develop/main); empty = repo default (origin/HEAD). Symphony fetches origin/<base> and branches off the latest tip.
     verify: ''                        # optional: command run in the worktree before the PR; non-zero aborts. e.g. 'swiftlint lint --quiet'
   - name: your-android-repo
     path: /path/to/your-android-repo

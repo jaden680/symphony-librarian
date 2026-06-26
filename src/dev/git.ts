@@ -47,29 +47,51 @@ export function defaultBranch(repoPath: string): string {
   return 'main';
 }
 
-function branchExists(repoPath: string, branch: string): boolean {
+function refExists(repoPath: string, ref: string): boolean {
   try {
-    git(repoPath, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`]);
+    git(repoPath, ['rev-parse', '--verify', '--quiet', ref]);
     return true;
   } catch {
     return false;
   }
 }
 
+function branchExists(repoPath: string, branch: string): boolean {
+  return refExists(repoPath, `refs/heads/${branch}`);
+}
+
 /**
  * Ensure a worktree at `worktreePath` on `branch`. Idempotent: reuses an existing
- * worktree; checks out an existing branch; otherwise creates the branch off `base`.
- * Returns whether the worktree was newly created.
+ * worktree; checks out an existing branch; otherwise fetches `base` from origin and
+ * creates the new branch off the *remote tip* (`origin/<base>`) so work starts from
+ * the latest integration branch — not a possibly-stale local ref. Falls back to the
+ * local base ref when offline / no such remote branch. Returns the created flag and
+ * the start point actually used.
  */
-export function ensureWorktree(repoPath: string, worktreePath: string, branch: string, base: string): { created: boolean } {
-  if (fs.existsSync(path.join(worktreePath, '.git'))) return { created: false };
+export function ensureWorktree(
+  repoPath: string,
+  worktreePath: string,
+  branch: string,
+  base: string,
+): { created: boolean; startPoint: string } {
+  if (fs.existsSync(path.join(worktreePath, '.git'))) return { created: false, startPoint: branch };
   fs.mkdirSync(path.dirname(worktreePath), { recursive: true });
   if (branchExists(repoPath, branch)) {
     git(repoPath, ['worktree', 'add', worktreePath, branch]);
-  } else {
-    git(repoPath, ['worktree', 'add', '-b', branch, worktreePath, base]);
+    return { created: true, startPoint: branch };
   }
-  return { created: true };
+  // Branch off the latest remote tip. Fetch is best-effort: if it fails (offline,
+  // unknown branch) we fall back to whatever local ref `base` resolves to.
+  let startPoint = base;
+  try {
+    git(repoPath, ['fetch', 'origin', base]);
+    if (refExists(repoPath, `refs/remotes/origin/${base}`)) startPoint = `origin/${base}`;
+    else if (refExists(repoPath, 'FETCH_HEAD')) startPoint = 'FETCH_HEAD';
+  } catch {
+    /* offline or no such remote branch — use the local base ref */
+  }
+  git(repoPath, ['worktree', 'add', '-b', branch, worktreePath, startPoint]);
+  return { created: true, startPoint };
 }
 
 /** True if the worktree has staged or unstaged changes (incl. untracked). */

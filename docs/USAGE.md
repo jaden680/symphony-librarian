@@ -199,8 +199,10 @@ unresolved falls back to `answer` (safe).
 
 A dev ticket runs this pipeline (execution config in `DEV.md`):
 
-1. **Worktree** — `git worktree add` a feature branch (Linear's `branchName`) off the
-   repo's default branch. Your working copy and the default branch are untouched.
+1. **Worktree** — `git worktree add` a feature branch (Linear's `branchName`). Symphony
+   fetches `origin/<base>` and branches off the **latest** integration branch (per-repo
+   `base`, e.g. `develop`; empty = the repo's default via `origin/HEAD`). Your working
+   copy and the base branch are untouched.
 2. **Agent (dev profile)** — only this mode gets `Edit`/`Write`/`Bash`. It edits code
    and writes `pr.md` (line 1 = title, rest = body) + `commit.txt`. It does **not**
    push or open a PR.
