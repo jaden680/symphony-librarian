@@ -108,14 +108,19 @@ hooks:
   # auto shell-escaped, but env vars are the clean, recommended path):
   #   $SYMPHONY_ISSUE_IDENTIFIER  $SYMPHONY_ISSUE_TITLE  $SYMPHONY_ISSUE_DESCRIPTION
   #   $SYMPHONY_ISSUE_STATE  $SYMPHONY_ISSUE_URL  $SYMPHONY_ISSUE_BRANCH  $SYMPHONY_ISSUE_PRIORITY
+  #   $SYMPHONY_REPOS  — space-separated repo names selected for this ticket
+  #                      (by the dev label/classifier). Empty = expose all repos.
   #
   # Runs once when a workspace is first created. Instead of cloning, expose the
   # existing local repos read-only as symlinks under ./codebase/ (no network, no
-  # disk copy). Idempotent via `ln -sfn`.
+  # disk copy). Idempotent via `ln -sfn`. When dev mode is enabled, $SYMPHONY_REPOS
+  # scopes the codebase to the relevant repo for the ticket (empty → all).
   after_create: |
     mkdir -p codebase
-    ln -sfn "/path/to/your-ios-repo" codebase/your-ios-repo
-    ln -sfn "/path/to/your-android-repo" codebase/your-android-repo
+    sel="${SYMPHONY_REPOS:-your-ios-repo your-android-repo}"
+    for r in $sel; do
+      [ -d "/path/to/$r" ] && ln -sfn "/path/to/$r" "codebase/$r"
+    done
   # Runs after each agent attempt. NEVER commits/pushes/opens a PR. It only copies
   # the produced answer.md to ~/symphony_answers with a timestamp.
   after_run: |

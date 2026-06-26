@@ -71,7 +71,8 @@ function startFakeLinear(): Promise<FakeServer> {
     createdAt: '2026-06-01T00:00:00.000Z',
     updatedAt: '2026-06-02T00:00:00.000Z',
     state: { id: 's-todo', name: issue.state, type: 'unstarted' },
-    labels: { nodes: [{ name: 'question' }] },
+    // `question` keeps it on the answer path; `ios` scopes the codebase to that repo.
+    labels: { nodes: [{ name: 'question' }, { name: 'ios' }] },
     inverseRelations: { nodes: [] },
   });
 
@@ -285,6 +286,25 @@ Curate a note for {{ topic }} in {{ vault_dir }}.
 `,
   );
 
+  // DEV.md: dev disabled-path is unused here (ZZ-1 is answer mode), but enabling
+  // dev exercises answer-mode repo scoping — the `ios` label must resolve to the
+  // ios repo and reach the after_create hook as $SYMPHONY_REPOS.
+  fs.writeFileSync(
+    path.join(tmp, 'DEV.md'),
+    `---
+classifier:
+  command: bash ${agentScript}
+repos:
+  - { name: app-ios, path: ${vaultDir}, labels: [ios], base: main, verify: '' }
+  - { name: app-android, path: ${vaultDir}, labels: [android], base: main, verify: '' }
+worktree_root: ${path.join(tmp, 'worktrees')}
+claude:
+  command: bash ${agentScript}
+---
+Implement {{ issue.identifier }}.
+`,
+  );
+
   const fake = await startFakeLinear();
   const endpoint = `http://127.0.0.1:${fake.port}/graphql`;
 
@@ -317,6 +337,12 @@ curation:
 followups:
   enabled: true
   state_path: ${path.join(tmp, '.symphony/followups.json')}
+dev:
+  enabled: true
+  path: ${path.join(tmp, 'DEV.md')}
+  dev_labels: [feature, bug]
+  answer_labels: [question]
+  done_state: In Review
 agent:
   max_concurrent_agents: 1
   stall_timeout_ms: 60000
@@ -327,6 +353,7 @@ hooks:
   timeout_ms: 30000
   after_create: |
     echo "fake clone" > CLONE_MARKER.txt
+    echo "$SYMPHONY_REPOS" > .repos.txt
   after_run: |
     mkdir -p ${answersDir}
     cp answer.md "${answersDir}/\${SYMPHONY_ISSUE_IDENTIFIER}.md" || echo "no answer.md produced"
@@ -391,6 +418,13 @@ Search the codebase and ./wiki (if present). Write your answer to answer.md.
   check(has('issue_transitioned'), 'expected an issue_transitioned event');
   check(fs.existsSync(path.join(wsPath, 'answer.md')), 'expected answer.md in the workspace');
   check(fs.existsSync(path.join(wsPath, 'CLONE_MARKER.txt')), 'expected after_create marker (CLONE_MARKER.txt)');
+  // Answer-mode repo scoping: the `ios` label must reach the hook as $SYMPHONY_REPOS.
+  const reposFile = path.join(wsPath, '.repos.txt');
+  check(has('answer_repo_scoped'), 'expected answer_repo_scoped (repo selected for the ticket)');
+  check(
+    fs.existsSync(reposFile) && fs.readFileSync(reposFile, 'utf8').trim() === 'app-ios',
+    `expected SYMPHONY_REPOS=app-ios in the hook (got ${fs.existsSync(reposFile) ? JSON.stringify(fs.readFileSync(reposFile, 'utf8').trim()) : '<missing>'})`,
+  );
   check(fs.existsSync(path.join(answersDir, 'ZZ-1.md')), 'expected after_run to copy answer to answers dir');
   check(
     fs.existsSync(path.join(wsPath, 'wiki')) && fs.lstatSync(path.join(wsPath, 'wiki')).isSymbolicLink(),

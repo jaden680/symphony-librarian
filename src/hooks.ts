@@ -19,8 +19,11 @@ export interface HookResult {
 
 /** Derive shell-safe SYMPHONY_ISSUE_* env vars from the render context's issue. */
 function issueEnv(context: Record<string, unknown>): Record<string, string> {
+  // SYMPHONY_REPOS: space-separated repo names selected for this ticket (empty =
+  // expose all). Lets the after_create hook scope the codebase per ticket.
+  const selectedRepos = typeof context.selectedRepos === 'string' ? context.selectedRepos : '';
   const issue = context.issue as Issue | undefined;
-  if (!issue) return {};
+  if (!issue) return { SYMPHONY_REPOS: selectedRepos };
   return {
     SYMPHONY_ISSUE_ID: issue.id ?? '',
     SYMPHONY_ISSUE_IDENTIFIER: issue.identifier ?? '',
@@ -30,6 +33,7 @@ function issueEnv(context: Record<string, unknown>): Record<string, string> {
     SYMPHONY_ISSUE_URL: issue.url ?? '',
     SYMPHONY_ISSUE_BRANCH: issue.branch_name ?? '',
     SYMPHONY_ISSUE_PRIORITY: issue.priority === null || issue.priority === undefined ? '' : String(issue.priority),
+    SYMPHONY_REPOS: selectedRepos,
   };
 }
 

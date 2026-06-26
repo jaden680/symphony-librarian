@@ -279,9 +279,11 @@ export class Orchestrator {
   }
 
   /**
-   * Decide dev vs answer (and which repo). Labels win; the LLM classifier is used
-   * only when no decisive label exists or a dev label has no repo. Unresolved →
-   * answer (safe). The classifier is invoked at most once (its decision is reused).
+   * Decide dev vs answer AND which repo (used to scope both the dev worktree and
+   * the answer-mode codebase). Labels win; the LLM classifier is consulted only
+   * when no decisive label exists or a dev label has no repo — and at most once.
+   * The repo is best-effort for BOTH modes (null = no signal → expose all repos in
+   * answer mode). A dev ticket with no resolvable repo falls back to answer.
    */
   private async classifyTicket(issue: Issue, log: Logger): Promise<{ mode: Mode; repo: DevRepo | null }> {
     const cfg = this.store.current;
@@ -300,19 +302,22 @@ export class Orchestrator {
     };
 
     // Mode: label wins; else ask the classifier (null → answer).
-    let mode: Mode;
-    if (labelMode) mode = labelMode;
-    else mode = (await classify())?.mode ?? 'answer';
+    const mode: Mode = labelMode ?? (await classify())?.mode ?? 'answer';
 
-    if (mode === 'answer') return { mode: 'answer', repo: null };
-
-    // Dev → resolve repo: label > sole configured repo > classifier pick.
+    // Repo: label > sole configured repo > classifier pick. Only call the
+    // classifier specifically to resolve a repo when in dev mode (answer scoping
+    // never forces an extra call — "no signal → all repos"); reuse it if it ran.
     let repo: DevRepo | null = labelRepo ?? soleRepo;
-    if (!repo) repo = findRepoByName((await classify())?.repoName, devCfg.repos);
-    if (!repo) return { mode: 'answer', repo: null }; // can't resolve a repo → safe fallback
+    if (!repo && (classifierDecision !== undefined || mode === 'dev')) {
+      repo = findRepoByName((await classify())?.repoName, devCfg.repos);
+    }
 
-    log.info('classified', { mode: 'dev', repo: repo.name, by: labelMode ? 'label' : 'agent' });
-    return { mode: 'dev', repo };
+    if (mode === 'dev' && !repo) {
+      // Can't resolve a dev repo → fall back to answer (scoped to any label/sole repo).
+      return { mode: 'answer', repo: labelRepo ?? soleRepo };
+    }
+    log.info('classified', { mode, repo: repo?.name ?? null, by: labelMode ? 'label' : 'agent' });
+    return { mode, repo };
   }
 
   /** Dev pipeline: write code → Draft PR → comment + move to dev.done_state. */
@@ -509,6 +514,8 @@ export class Orchestrator {
     const log = this.logger.child({ issue_id: issue.id, issue_identifier: issue.identifier });
     const handle = this.workers.get(issue.id)!;
 
+    // Repo scope for answer mode (exposed to hooks as $SYMPHONY_REPOS; empty = all).
+    let scopedRepoName = '';
     try {
       // --- mode classification: dev tickets take a separate write→PR pipeline ---
       // (inside the try so the finally below always releases the worker slot).
@@ -529,11 +536,14 @@ export class Orchestrator {
         if (mode === 'dev' && !repo) {
           log.warn('dev_no_repo', { reason: 'no repo resolved; falling back to answer mode' });
         }
+        // Answer mode: scope the codebase to the selected repo, if any.
+        scopedRepoName = repo?.name ?? '';
+        if (scopedRepoName) log.info('answer_repo_scoped', { repo: scopedRepoName });
       }
 
       // --- workspace preparation ---
       const { path: wsPath, createdNow } = ensureWorkspace(cfg.workspace.root, issue.identifier);
-      const hookCtx = { issue, attempt: null as number | null };
+      const hookCtx = { issue, attempt: null as number | null, selectedRepos: scopedRepoName };
 
       if (createdNow && cfg.hooks.afterCreate) {
         const res = await runHook('after_create', cfg.hooks.afterCreate, wsPath, hookCtx, cfg.hooks.timeoutMs, log, cfg.hooks.envPassthrough);

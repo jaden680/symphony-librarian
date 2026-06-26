@@ -197,6 +197,14 @@ open a Draft PR for you to review). Classification is hybrid — a `dev`/`featur
 is decisive does a lightweight LLM classifier judge from the ticket text. Anything
 unresolved falls back to `answer` (safe).
 
+**Repo scoping (both modes).** The same repo selection (label → classifier →
+none) applies to the **answer** path too: when dev is enabled, the selected repo
+is exposed to the `after_create` hook as `$SYMPHONY_REPOS` (a space-separated repo
+name; empty = expose all). The shipped hook honors it to symlink only the relevant
+repo into `./codebase/`, so a question with an `ios` label searches only the iOS
+repo. No signal → all repos (current behavior). (When dev is disabled, scoping is
+off and the hook exposes everything, exactly as before.)
+
 A dev ticket runs this pipeline (execution config in `DEV.md`):
 
 1. **Worktree** — `git worktree add` a feature branch (Linear's `branchName`). Symphony

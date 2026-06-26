@@ -14,6 +14,9 @@ PR for human review). Decision → branch → execute → report.
 1. **Classification** — hybrid: routing label wins; otherwise a lightweight LLM
    classifier judges from the ticket text. Ambiguous → fall back to **answer** (safe).
 2. **Repo selection** — hybrid: `ios`/`android` label wins; else the classifier picks.
+   The same selection scopes the **answer** path too: the chosen repo is passed to the
+   `after_create` hook as `$SYMPHONY_REPOS` so it symlinks only that repo into
+   `./codebase/` (no signal → all repos; dev disabled → all repos, as before).
 3. **Git/PR execution** — **orchestrator-owned (deterministic)**. The agent only
    edits code and writes `pr.md` + `commit.txt`; the orchestrator does
    `git commit/push` + `gh pr create --draft` and strips Claude attribution.
