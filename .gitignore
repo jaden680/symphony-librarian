@@ -1,6 +1,7 @@
 node_modules/
 dist/
 symphony_workspaces/
+symphony_worktrees/
 .symphony/
 *.log
 .DS_Store
@@ -10,3 +11,4 @@ symphony_answers/
 # personal configs (use the *.example.md templates)
 WORKFLOW.md
 LIBRARIAN.md
+DEV.md

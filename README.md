@@ -2,12 +2,15 @@
 
 A read-only **codebase Q&A bot** driven by a Linear board, paired with a **knowledge curator** that distills scattered decisions (Slack/Notion) into an Obsidian vault — so answers get smarter over time.
 
-- **Symphony** — watches your issue tracker, picks up question issues, and answers them grounded in your **codebase + wiki + linked Slack threads**. Read-only (no PRs): it posts the answer as a comment and moves the issue to Done. Reply on the issue and it answers your follow-up too (the full thread is fed back as context). Adapted from [openai/symphony](https://github.com/openai/symphony).
-- **Librarian** — harvests the "needs follow-up" gaps from those answers, searches Slack/Notion, and writes classified **decision notes** into Obsidian. Based on Andrej Karpathy's *LLM Wiki* pattern.
+- **Symphony** — watches your issue tracker, picks up question issues, and answers them grounded in your **codebase + wiki + linked Slack threads**. Read-only by default (no PRs): it posts the answer as a comment and moves the issue to Done. Reply on the issue and it answers your follow-up too (the full thread is fed back as context). Adapted from [openai/symphony](https://github.com/openai/symphony).
+- **Dev mode** (opt-in) — tickets labeled `dev`/`feature`/`bug` (or judged so) are *implemented*: Symphony works in an isolated git worktree, writes the code, and opens a **Draft PR** for you to review (commit/PR formatted, AI attribution stripped), moving the ticket to In Review. Off by default.
+- **Librarian** — harvests the "needs follow-up" gaps from answers, searches Slack/Notion, and writes classified **decision notes** into Obsidian. Based on Andrej Karpathy's *LLM Wiki* pattern.
 
 ```mermaid
 flowchart TD
-    Q["Linear question issue"] --> A["Answer from code + wiki + Slack<br/>→ Linear comment + Done"]
+    Q["Linear issue"] --> CL{"classify"}
+    CL -->|"question"| A["Answer from code + wiki + Slack<br/>→ comment + Done"]
+    CL -->|"dev (opt-in)"| D["Worktree → write code<br/>→ Draft PR + In Review"]
     A -->|"'needs follow-up' = knowledge gap"| C["Curation queue (auto)"]
     C -->|"Librarian (periodic)"| K["Search Slack/Notion · distill<br/>→ Obsidian note"]
     K -.->|"feeds the next answer"| Q
@@ -37,6 +40,7 @@ Stop with `Ctrl-C`.
 ## Config & docs
 
 - `WORKFLOW.example.md` — Symphony config (tracker, agent, hooks, prompt template)
+- `DEV.example.md` — dev-mode config (repos, worktree, Draft PR, prompt) — opt-in
 - `LIBRARIAN.example.md` — Librarian config (vault, sources, prompt)
 - **Full setup, options, safety & troubleshooting → [docs/USAGE.md](docs/USAGE.md)**
 - Design notes → [`docs/superpowers/`](docs/superpowers)

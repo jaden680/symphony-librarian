@@ -188,6 +188,38 @@ Answered comment ids and the last-checked timestamp persist to
 > the offline test fake; confirm it against your live Linear workspace. The poll
 > fails gracefully (logged as `followup_check_failed`) and retries next tick.
 
+### Dev mode (optional, opt-in)
+
+By default Symphony is read-only. Turn on `dev.enabled` and tickets are first
+**classified**: `answer` (the read-only flow) or `dev` (implement the change and
+open a Draft PR for you to review). Classification is hybrid — a `dev`/`feature`/
+`bug` label (or `ios`/`android` for the repo) decides cheaply; only when no label
+is decisive does a lightweight LLM classifier judge from the ticket text. Anything
+unresolved falls back to `answer` (safe).
+
+A dev ticket runs this pipeline (execution config in `DEV.md`):
+
+1. **Worktree** — `git worktree add` a feature branch (Linear's `branchName`) off the
+   repo's default branch. Your working copy and the default branch are untouched.
+2. **Agent (dev profile)** — only this mode gets `Edit`/`Write`/`Bash`. It edits code
+   and writes `pr.md` (line 1 = title, rest = body) + `commit.txt`. It does **not**
+   push or open a PR.
+3. **(optional) verify** — a per-repo command (e.g. a linter); non-zero aborts before
+   any PR. Default off.
+4. **Finalize (orchestrator-owned, deterministic)** — `git add -A` → commit (message
+   sanitized: `Co-Authored-By: Claude`, "Generated with Claude Code", 🤖, and your
+   `pr.strip_patterns` are removed) → `git push` the branch → `gh pr create --draft`
+   (sanitized body + a Linear link). Re-runs reuse the branch and update the PR.
+5. **Report** — a Linear comment with the PR URL, and the ticket moves to `done_state`
+   (In Review). Edge cases: no file changes or a failed verify → no PR, a failure
+   comment, ticket left as-is.
+
+Safety: dev writes happen only in a throwaway worktree on a feature branch; PRs are
+Draft (never merged) and `gh` uses your existing auth; the answer path stays strictly
+read-only. Set up `DEV.md` from `DEV.example.md` and ensure `gh auth status` is logged
+in. (Enabling `dev.enabled` from off → on needs a restart; `DEV.md` edits are picked
+up per-ticket.)
+
 ### Config reference
 
 | Key | Default | Notes |
@@ -222,6 +254,11 @@ Answered comment ids and the last-checked timestamp persist to
 | `tracker.reopen_grace_sec` | `30` | After completion, wait this long before re-dispatching an issue moved back to an active state (covers done-state propagation lag). |
 | `followups.enabled` | `false` | Answer new human comments on issues the bot already answered. Polls comments (no webhook). Requires `post_answer_comment: true`. |
 | `followups.state_path` | `.symphony/followups.json` | Persists the last-checked timestamp + answered comment ids across restarts. |
+| `dev.enabled` | `false` | Enable dev mode (write code → Draft PR). Off = every ticket takes the read-only answer path. See "Dev mode" below. |
+| `dev.path` | `DEV.md` | Dev execution config (repos, worktree, dev prompt). |
+| `dev.dev_labels` | `[dev, feature, bug, fix]` | Labels routing a ticket to dev mode (label wins over the classifier). |
+| `dev.answer_labels` | `[question, answer, docs]` | Labels forcing the read-only answer path. |
+| `dev.done_state` | `In Review` | State dev tickets move to after the Draft PR (not Done). |
 
 Changes to `WORKFLOW.md` are **picked up live** (file watch) — polling cadence,
 concurrency, states, hooks, and the prompt for future runs all re-apply without a

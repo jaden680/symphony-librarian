@@ -16,9 +16,11 @@
     "start": "node dist/cli.js --workflow WORKFLOW.md",
     "dev": "npm run build && npm run start",
     "test:e2e": "npm run build && node dist/test/e2e.js",
+    "test:dev-e2e": "npm run build && node dist/test/dev-e2e.js",
     "curate": "npm run build && node dist/librarian/cli.js --librarian LIBRARIAN.md",
-    "test:unit": "npm run build && node --test dist/test/librarian/*.test.js",
-    "test:librarian-e2e": "npm run build && node dist/test/librarian-e2e.js"
+    "test:unit": "npm run build && node --test dist/test/*.test.js dist/test/librarian/*.test.js",
+    "test:librarian-e2e": "npm run build && node dist/test/librarian-e2e.js",
+    "test": "npm run test:unit && node dist/test/e2e.js && node dist/test/dev-e2e.js && node dist/test/librarian-e2e.js"
   },
   "dependencies": {
     "yaml": "^2.5.1"

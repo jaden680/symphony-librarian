@@ -62,6 +62,18 @@ export interface EffectiveConfig {
     /** Absolute path of the persisted follow-up state (lastCheck + responded ids). */
     statePath: string;
   };
+  dev: {
+    /** Master switch. When false, every ticket takes the read-only answer path. */
+    enabled: boolean;
+    /** Absolute path of DEV.md (dev execution config). */
+    path: string;
+    /** Lowercased labels that route a ticket to dev mode (label fast-path). */
+    devLabels: string[];
+    /** Lowercased labels that force the answer path. */
+    answerLabels: string[];
+    /** State dev tickets move to after the Draft PR (e.g. "In Review"). */
+    doneState: string;
+  };
   curation: {
     /** When true, harvest the answer's "추가 확인 필요" gaps into the curation queue. */
     autoEnqueueGaps: boolean;

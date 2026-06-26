@@ -21,6 +21,10 @@ import { loadLibrarianConfig } from './librarian/config';
 import { drainQueue } from './librarian/curate';
 import { FollowupStore } from './followups';
 import { CommentInfo } from './types';
+import { loadDevConfig } from './dev/config';
+import { classifyByLabels, selectRepoByLabels, findRepoByName, runClassifier, Mode } from './dev/classify';
+import { runDevPipeline } from './dev/pipeline';
+import { DevRepo } from './dev/types';
 
 const ANSWER_FILE = 'answer.md';
 
@@ -80,6 +84,20 @@ export class Orchestrator {
     if (cfg.followups.enabled) {
       this.followupStore = new FollowupStore(cfg.followups.statePath, new Date().toISOString());
       this.logger.info('followups_enabled', { since: this.followupStore.lastCheck });
+    }
+    if (cfg.dev.enabled) {
+      try {
+        const devCfg = loadDevConfig(cfg.dev.path);
+        this.logger.info('dev_enabled', {
+          dev_path: cfg.dev.path,
+          repos: devCfg.repos.map((r) => r.name),
+          done_state: cfg.dev.doneState,
+        });
+      } catch (err) {
+        // Fail loud at startup rather than silently per-ticket later.
+        this.logger.error('dev_config_invalid', { error: (err as Error).message });
+        throw err;
+      }
     }
     await this.tick();
   }
@@ -260,6 +278,104 @@ export class Orchestrator {
     this.tickTimer = setTimeout(() => void this.tick(), interval);
   }
 
+  /**
+   * Decide dev vs answer (and which repo). Labels win; the LLM classifier is used
+   * only when no decisive label exists or a dev label has no repo. Unresolved →
+   * answer (safe). The classifier is invoked at most once (its decision is reused).
+   */
+  private async classifyTicket(issue: Issue, log: Logger): Promise<{ mode: Mode; repo: DevRepo | null }> {
+    const cfg = this.store.current;
+    const devCfg = loadDevConfig(cfg.dev.path);
+    const labelMode = classifyByLabels(issue.labels, cfg.dev.devLabels, cfg.dev.answerLabels);
+    const labelRepo = selectRepoByLabels(issue.labels, devCfg.repos);
+    const soleRepo = devCfg.repos.length === 1 ? devCfg.repos[0] : null;
+    const model = this.resolveModel(issue);
+
+    let classifierDecision: { mode: Mode; repoName: string | null } | null | undefined;
+    const classify = async () => {
+      if (classifierDecision === undefined) {
+        classifierDecision = devCfg.classifierCommand ? await runClassifier(issue, devCfg, model, log) : null;
+      }
+      return classifierDecision;
+    };
+
+    // Mode: label wins; else ask the classifier (null → answer).
+    let mode: Mode;
+    if (labelMode) mode = labelMode;
+    else mode = (await classify())?.mode ?? 'answer';
+
+    if (mode === 'answer') return { mode: 'answer', repo: null };
+
+    // Dev → resolve repo: label > sole configured repo > classifier pick.
+    let repo: DevRepo | null = labelRepo ?? soleRepo;
+    if (!repo) repo = findRepoByName((await classify())?.repoName, devCfg.repos);
+    if (!repo) return { mode: 'answer', repo: null }; // can't resolve a repo → safe fallback
+
+    log.info('classified', { mode: 'dev', repo: repo.name, by: labelMode ? 'label' : 'agent' });
+    return { mode: 'dev', repo };
+  }
+
+  /** Dev pipeline: write code → Draft PR → comment + move to dev.done_state. */
+  private async runDevTicket(issue: Issue, repo: DevRepo, handle: WorkerHandle, log: Logger): Promise<void> {
+    const cfg = this.store.current;
+    handle.status = 'running';
+    log.info('dev_dispatched', { repo: repo.name });
+    await this.maybeMoveToStartState(issue, log);
+
+    let result;
+    try {
+      const devCfg = loadDevConfig(cfg.dev.path);
+      const model = this.resolveModel(issue);
+      result = await runDevPipeline({ issue, repo, devCfg, model, logger: log });
+    } catch (err) {
+      log.error('dev_failed', { reason: 'unexpected', detail: (err as Error).message });
+      this.givenUp.add(issue.id);
+      return;
+    }
+
+    if (!result.ok) {
+      log.error('dev_failed', { reason: result.reason });
+      if (cfg.tracker.postAnswerComment) {
+        try {
+          await this.client.createComment(
+            issue.id,
+            `🛠 개발 모드 실패: \`${result.reason}\`\nSymphony가 코드 작업을 완료하지 못했습니다. 워크트리/로그를 확인해 주세요.`,
+          );
+        } catch (err) {
+          log.warn('dev_comment_failed', { reason: (err as Error).message });
+        }
+      }
+      this.givenUp.add(issue.id);
+      return;
+    }
+
+    if (cfg.tracker.postAnswerComment) {
+      try {
+        await this.client.createComment(issue.id, devResultComment(result));
+        log.info('dev_comment_posted', { url: result.prUrl });
+      } catch (err) {
+        log.warn('dev_comment_failed', { reason: (err as Error).message });
+      }
+    }
+
+    const stateId = this.resolveStateId(cfg.dev.doneState);
+    if (!stateId) {
+      log.error('dev_done_state_not_found', { done_state: cfg.dev.doneState });
+      this.givenUp.add(issue.id);
+      return;
+    }
+    try {
+      await this.client.moveIssueToState(issue.id, stateId);
+      log.info('issue_transitioned', { to_state: cfg.dev.doneState, phase: 'dev_done' });
+      this.processed.add(issue.id);
+      this.completedAt.set(issue.id, Date.now());
+    } catch (err) {
+      const le = err as LinearError;
+      log.error('tracker_transition_failed', { error: le.message, category: le.category ?? 'unknown' });
+      this.givenUp.add(issue.id);
+    }
+  }
+
   private async resolveTeamIfNeeded(): Promise<void> {
     const cfg = this.store.current;
     const sig = `${cfg.tracker.endpoint}|${cfg.tracker.apiKey}`;
@@ -394,6 +510,27 @@ export class Orchestrator {
     const handle = this.workers.get(issue.id)!;
 
     try {
+      // --- mode classification: dev tickets take a separate write→PR pipeline ---
+      // (inside the try so the finally below always releases the worker slot).
+      if (cfg.dev.enabled) {
+        let mode: Mode = 'answer';
+        let repo: DevRepo | null = null;
+        try {
+          const decision = await this.classifyTicket(issue, log);
+          mode = decision.mode;
+          repo = decision.repo;
+        } catch (err) {
+          log.warn('classify_error', { detail: (err as Error).message, fallback: 'answer' });
+        }
+        if (mode === 'dev' && repo) {
+          await this.runDevTicket(issue, repo, handle, log);
+          return;
+        }
+        if (mode === 'dev' && !repo) {
+          log.warn('dev_no_repo', { reason: 'no repo resolved; falling back to answer mode' });
+        }
+      }
+
       // --- workspace preparation ---
       const { path: wsPath, createdNow } = ensureWorkspace(cfg.workspace.root, issue.identifier);
       const hookCtx = { issue, attempt: null as number | null };
@@ -642,6 +779,18 @@ function buildCurationFooter(enqueued: string[], skipped: string[]): string {
   if (enqueued.length > 0) lines.push(`- 큐 적재됨 — 추후 위키로 정제 예정: ${enqueued.join(', ')}`);
   if (skipped.length > 0) lines.push(`- 이미 위키에 있어 스킵: ${skipped.join(', ')}`);
   return lines.join('\n');
+}
+
+/** Linear comment reporting the dev-mode outcome (Draft PR link). */
+function devResultComment(result: { prUrl: string; branch: string; repo: string; updated: boolean; title: string }): string {
+  const verb = result.updated ? '갱신했습니다' : '열었습니다';
+  return [
+    `🛠 **개발 모드** — Draft PR을 ${verb}. 리뷰 후 머지해 주세요.`,
+    '',
+    `- PR: ${result.prUrl}`,
+    `- 레포: \`${result.repo}\` · 브랜치: \`${result.branch}\``,
+    `- 제목: ${result.title}`,
+  ].join('\n');
 }
 
 function byPriorityThenAge(a: Issue, b: Issue): number {

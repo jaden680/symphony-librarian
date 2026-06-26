@@ -50,6 +50,20 @@ followups:
   enabled: false
   state_path: .symphony/followups.json   # persists lastCheck + answered comment ids
 
+dev:
+  # Dev mode: classify a ticket as "answer" (read-only, default) vs "dev" (write
+  # code → DRAFT PR for human review). OFF by default — when off, every ticket
+  # takes the existing read-only path. Execution config lives in DEV.md.
+  # Flow: classify → worktree → agent edits code + writes pr.md/commit.txt →
+  # orchestrator commits (AI attribution stripped) + pushes a branch + opens a
+  # Draft PR → comments the PR link → moves the ticket to `done_state`.
+  enabled: false
+  path: DEV.md
+  dev_labels: [dev, feature, bug, fix]      # any of these → dev mode (label wins)
+  answer_labels: [question, answer, docs]   # any of these → read-only answer mode
+  # No decisive label → a lightweight classifier (DEV.md) decides; unresolved → answer.
+  done_state: In Review                     # dev tickets land here (not Done) for review
+
 agent:
   max_concurrent_agents: 3
   stall_timeout_ms: 600000        # kill + restart an agent after 10 min of no output

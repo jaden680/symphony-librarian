@@ -127,6 +127,7 @@ export function loadConfig(workflowPath: string): EffectiveConfig {
   const hooks = asObject(cfg.hooks);
   const curation = asObject(cfg.curation);
   const followups = asObject(cfg.followups);
+  const dev = asObject(cfg.dev);
 
   const workflowDir = path.dirname(abs);
 
@@ -185,6 +186,13 @@ export function loadConfig(workflowPath: string): EffectiveConfig {
     followups: {
       enabled: asBool(followups.enabled, false),
       statePath: resolvePath(workflowDir, asString(followups.state_path, '.symphony/followups.json')),
+    },
+    dev: {
+      enabled: asBool(dev.enabled, false),
+      path: resolvePath(workflowDir, asString(dev.path, 'DEV.md')),
+      devLabels: asStringList(dev.dev_labels, ['dev', 'feature', 'bug', 'fix']).map((l) => l.toLowerCase()),
+      answerLabels: asStringList(dev.answer_labels, ['question', 'answer', 'docs']).map((l) => l.toLowerCase()),
+      doneState: asString(dev.done_state, 'In Review').trim() || 'In Review',
     },
     curation: {
       autoEnqueueGaps: asBool(curation.auto_enqueue_gaps, false),
