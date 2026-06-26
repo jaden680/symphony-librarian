@@ -2,7 +2,7 @@
 
 A read-only **codebase Q&A bot** driven by a Linear board, paired with a **knowledge curator** that distills scattered decisions (Slack/Notion) into an Obsidian vault — so answers get smarter over time.
 
-- **Symphony** — watches your issue tracker, picks up question issues, and answers them grounded in your **codebase + wiki + linked Slack threads**. Read-only (no PRs): it posts the answer as a comment and moves the issue to Done. Adapted from [openai/symphony](https://github.com/openai/symphony).
+- **Symphony** — watches your issue tracker, picks up question issues, and answers them grounded in your **codebase + wiki + linked Slack threads**. Read-only (no PRs): it posts the answer as a comment and moves the issue to Done. Reply on the issue and it answers your follow-up too (the full thread is fed back as context). Adapted from [openai/symphony](https://github.com/openai/symphony).
 - **Librarian** — harvests the "needs follow-up" gaps from those answers, searches Slack/Notion, and writes classified **decision notes** into Obsidian. Based on Andrej Karpathy's *LLM Wiki* pattern.
 
 ```mermaid

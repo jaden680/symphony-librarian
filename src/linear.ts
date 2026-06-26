@@ -3,7 +3,7 @@
 // Uses the global fetch (Node 22+). The personal API key is sent verbatim in the
 // Authorization header per Linear's convention. The key is never logged.
 
-import { Issue, TrackerState } from './types';
+import { CommentInfo, Issue, TrackerState } from './types';
 
 export class LinearError extends Error {
   constructor(public readonly category: string, message: string) {
@@ -149,6 +149,82 @@ export class LinearClient {
       throw new LinearError('linear_graphql_errors', `commentCreate returned success=false for ${issueId}`);
     }
   }
+
+  /** The authenticated bot user's id — used to tell bot vs human comments apart. */
+  async getViewerId(): Promise<string> {
+    const data = await this.query<{ viewer: { id: string } }>(`query SymphonyViewer { viewer { id } }`, {});
+    return data.viewer.id;
+  }
+
+  /**
+   * Comments created after `sinceIso` (best-effort: filtered server-side by
+   * createdAt; the caller re-checks). NOTE: the `createdAt` filter scalar is
+   * verified only against the offline test fake — confirm against live Linear.
+   */
+  async fetchCommentsSince(sinceIso: string): Promise<CommentInfo[]> {
+    const data = await this.query<{ comments: { nodes: RawComment[] } }>(
+      `query SymphonyComments($since: DateTimeOrDuration!) {
+         comments(filter: { createdAt: { gt: $since } }, first: 50) {
+           nodes {
+             id body createdAt
+             user { id }
+             issue { id identifier title description state { name } team { key } }
+           }
+         }
+       }`,
+      { since: sinceIso },
+    );
+    return (data.comments.nodes ?? []).filter((c) => c.issue).map(normalizeComment);
+  }
+
+  /** Full comment thread of an issue (oldest first), for follow-up context. */
+  async fetchIssueComments(issueId: string): Promise<Array<{ id: string; authorId: string | null; body: string; createdAt: string }>> {
+    const data = await this.query<{
+      issue: { comments: { nodes: Array<{ id: string; body: string; createdAt: string; user: { id: string } | null }> } } | null;
+    }>(
+      `query SymphonyIssueComments($id: String!) {
+         issue(id: $id) { comments(first: 100) { nodes { id body createdAt user { id } } } }
+       }`,
+      { id: issueId },
+    );
+    const nodes = data.issue?.comments.nodes ?? [];
+    return nodes
+      .map((n) => ({ id: n.id, authorId: n.user?.id ?? null, body: n.body, createdAt: n.createdAt }))
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  }
+}
+
+interface RawComment {
+  id: string;
+  body: string;
+  createdAt: string;
+  user: { id: string } | null;
+  issue: {
+    id: string;
+    identifier: string;
+    title: string;
+    description: string | null;
+    state: { name: string };
+    team: { key: string };
+  } | null;
+}
+
+function normalizeComment(raw: RawComment): CommentInfo {
+  const i = raw.issue!;
+  return {
+    id: raw.id,
+    body: raw.body ?? '',
+    createdAt: raw.createdAt,
+    authorId: raw.user?.id ?? '',
+    issue: {
+      id: i.id,
+      identifier: i.identifier,
+      title: i.title,
+      description: i.description ?? null,
+      state: i.state.name,
+      teamKey: i.team.key,
+    },
+  };
 }
 
 interface RawIssue {

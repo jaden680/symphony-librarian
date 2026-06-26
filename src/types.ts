@@ -56,6 +56,12 @@ export interface EffectiveConfig {
     /** Extra env var names forwarded to hook subprocesses (deny-by-default base). */
     envPassthrough: string[];
   };
+  followups: {
+    /** When true, answer new human comments on issues the bot already answered. */
+    enabled: boolean;
+    /** Absolute path of the persisted follow-up state (lastCheck + responded ids). */
+    statePath: string;
+  };
   curation: {
     /** When true, harvest the answer's "추가 확인 필요" gaps into the curation queue. */
     autoEnqueueGaps: boolean;
@@ -86,6 +92,22 @@ export interface Issue {
   blocked_by: string[];
   created_at: string | null;
   updated_at: string | null;
+}
+
+/** A tracker comment with its parent issue (used for comment-driven follow-ups). */
+export interface CommentInfo {
+  id: string;
+  body: string;
+  createdAt: string;
+  authorId: string;
+  issue: {
+    id: string;
+    identifier: string;
+    title: string;
+    description: string | null;
+    state: string;
+    teamKey: string;
+  };
 }
 
 /** A workflow state as known by the tracker (used to resolve done_state -> id). */

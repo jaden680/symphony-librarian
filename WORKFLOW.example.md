@@ -40,6 +40,16 @@ curation:
   auto_drain_interval_sec: 600    # 10 minutes
   librarian_path: LIBRARIAN.md
 
+followups:
+  # Comment-driven follow-ups. When enabled, Symphony polls Linear for new comments
+  # and, when a teammate replies on an issue the bot already answered, runs the agent
+  # again to post an additional answer. No webhook/tunnel needed — it polls comments
+  # created since the last check (scales with comment volume, not ticket count).
+  # Each follow-up is a fresh session, so the full comment thread is injected as
+  # context. Requires post_answer_comment: true (that's how the bot "answered").
+  enabled: false
+  state_path: .symphony/followups.json   # persists lastCheck + answered comment ids
+
 agent:
   max_concurrent_agents: 3
   stall_timeout_ms: 600000        # kill + restart an agent after 10 min of no output

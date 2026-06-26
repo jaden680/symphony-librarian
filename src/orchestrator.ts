@@ -19,6 +19,8 @@ import { CurationQueue } from './librarian/queue';
 import { findExistingNote } from './librarian/vault';
 import { loadLibrarianConfig } from './librarian/config';
 import { drainQueue } from './librarian/curate';
+import { FollowupStore } from './followups';
+import { CommentInfo } from './types';
 
 const ANSWER_FILE = 'answer.md';
 
@@ -48,6 +50,8 @@ export class Orchestrator {
   private tickTimer?: NodeJS.Timeout;
   private drainTimer?: NodeJS.Timeout;
   private draining = false;
+  private viewerId?: string;
+  private followupStore?: FollowupStore;
 
   constructor(
     private readonly store: ConfigStore,
@@ -72,6 +76,10 @@ export class Orchestrator {
     if (cfg.curation.autoDrainIntervalSec > 0) {
       this.logger.info('curation_drain_enabled', { interval_sec: cfg.curation.autoDrainIntervalSec });
       this.scheduleDrain();
+    }
+    if (cfg.followups.enabled) {
+      this.followupStore = new FollowupStore(cfg.followups.statePath, new Date().toISOString());
+      this.logger.info('followups_enabled', { since: this.followupStore.lastCheck });
     }
     await this.tick();
   }
@@ -113,6 +121,136 @@ export class Orchestrator {
     } finally {
       this.draining = false;
       this.scheduleDrain();
+    }
+  }
+
+  /** Poll for new human comments on bot-answered issues and answer them. */
+  private async checkFollowups(): Promise<void> {
+    const cfg = this.store.current;
+    if (!this.followupStore) return;
+    if (!this.viewerId) this.viewerId = await this.client.getViewerId();
+    const since = this.followupStore.lastCheck;
+    const comments = (await this.client.fetchCommentsSince(since)).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    let anchor = since;
+    for (const c of comments) {
+      if (c.createdAt <= since) continue;
+      // Safely consumable (advance past): other team, our own comment, or already answered.
+      if (lower(c.issue.teamKey) !== lower(cfg.tracker.teamKey) || c.authorId === this.viewerId || this.followupStore.hasResponded(c.id)) {
+        anchor = c.createdAt;
+        continue;
+      }
+      // Only a follow-up if the bot has commented on this issue (i.e. it answered it).
+      let authorIds: string[];
+      try {
+        authorIds = (await this.client.fetchIssueComments(c.issue.id)).map((x) => x.authorId).filter((x): x is string => x !== null);
+      } catch {
+        break; // can't verify now → retry next tick without advancing past this comment
+      }
+      if (!authorIds.includes(this.viewerId)) {
+        anchor = c.createdAt;
+        continue; // not bot-answered → ignore
+      }
+      if (this.workers.has(c.issue.id) || this.workers.size >= cfg.agent.maxConcurrentAgents) break; // busy/no slot → retry
+      this.followupStore.markResponded(c.id);
+      anchor = c.createdAt;
+      void this.runFollowup(c);
+    }
+    if (anchor !== since) this.followupStore.setLastCheck(anchor);
+  }
+
+  /** Answer a follow-up comment in a fresh agent session, injecting the full thread. */
+  private async runFollowup(comment: CommentInfo): Promise<void> {
+    const cfg = this.store.current;
+    const issue: Issue = {
+      id: comment.issue.id,
+      identifier: comment.issue.identifier,
+      title: comment.issue.title,
+      description: comment.issue.description,
+      priority: null,
+      state: comment.issue.state,
+      branch_name: null,
+      url: null,
+      labels: [],
+      blocked_by: [],
+      created_at: null,
+      updated_at: null,
+    };
+    const log = this.logger.child({ issue_id: issue.id, issue_identifier: issue.identifier, followup_comment: comment.id });
+    this.workers.set(issue.id, { issue, status: 'running' });
+    try {
+      const { path: wsPath, createdNow } = ensureWorkspace(cfg.workspace.root, issue.identifier);
+      if (createdNow && cfg.hooks.afterCreate) {
+        const res = await runHook('after_create', cfg.hooks.afterCreate, wsPath, { issue, attempt: null }, cfg.hooks.timeoutMs, log, cfg.hooks.envPassthrough);
+        if (!res.ok) {
+          log.error('followup_failed', { reason: 'after_create_failed', detail: res.reason });
+          return;
+        }
+      }
+      ensureWikiMount(wsPath, cfg.wiki.vaultPath, cfg.wiki.mountName, log);
+
+      // Reconstruct the conversation from Linear (this is a fresh session — no memory).
+      let thread = '';
+      try {
+        const all = await this.client.fetchIssueComments(issue.id);
+        thread = all
+          .map((x) => `[${x.authorId === this.viewerId ? 'BOT(이전 답변)' : 'HUMAN'} · ${x.createdAt}]\n${x.body}`)
+          .join('\n\n---\n\n');
+      } catch {
+        /* best-effort; thread context optional */
+      }
+
+      const model = this.resolveModel(issue);
+      let prompt: string;
+      let command: string;
+      try {
+        const base = render(cfg.promptTemplate, { issue, attempt: null });
+        prompt =
+          `[FOLLOW-UP] 이 이슈는 이미 답변했고, 팀원이 새 댓글을 달았습니다. 지금은 새 세션이라 이전 대화 기억이 없으니 ` +
+          `아래 전체 스레드를 읽고, 가장 최근 댓글에 대해 이전 답변 위에 이어서 **추가 답변**을 작성하세요(이전 답변을 통째로 반복하지 말 것). ` +
+          `답은 answer.md 에 쓰세요.\n\n` +
+          `===== 댓글 스레드 (오래된→최신) =====\n${thread || '(스레드 조회 불가)'}\n\n` +
+          `===== 지금 답해야 할 최신 댓글 =====\n${comment.body}\n\n` +
+          `===== 원래 작업 지시 & 규칙 =====\n${base}`;
+        command = render(cfg.claude.command, { issue, attempt: null, model }, { shellEscape: true });
+      } catch (err) {
+        log.error('followup_failed', { reason: 'render_failed', detail: (err as Error).message });
+        return;
+      }
+
+      log.info('followup_dispatched', { comment: comment.id, model });
+      const result = await runAgent({
+        command,
+        workspacePath: wsPath,
+        prompt,
+        stallTimeoutMs: cfg.agent.stallTimeoutMs,
+        answerFile: ANSWER_FILE,
+        logger: log,
+      });
+      if (result.kind !== 'completed') {
+        log.error('followup_failed', { reason: result.kind });
+        return;
+      }
+      // Harvest gaps first so the follow-up comment can report what was queued.
+      const curation = cfg.curation.autoEnqueueGaps
+        ? this.enqueueAnswerGaps(wsPath, log)
+        : { enqueued: [], skipped: [] };
+      try {
+        const answer = fs.readFileSync(`${wsPath}/${ANSWER_FILE}`, 'utf8');
+        if (answer.trim()) {
+          const footer = buildCurationFooter(curation.enqueued, curation.skipped);
+          const body = footer ? `${answer.trimEnd()}\n\n${footer}` : answer;
+          await this.client.createComment(issue.id, body);
+          log.info('followup_answered', { chars: body.length, gaps_enqueued: curation.enqueued.length });
+        } else {
+          log.warn('followup_answer_empty', {});
+        }
+      } catch (err) {
+        log.warn('followup_post_failed', { reason: (err as Error).message });
+      }
+    } catch (err) {
+      log.error('followup_failed', { reason: 'unexpected', detail: (err as Error).message });
+    } finally {
+      this.workers.delete(issue.id);
     }
   }
 
@@ -171,6 +309,15 @@ export class Orchestrator {
         if (slots <= 0) break;
         this.dispatch(issue);
         slots--;
+      }
+
+      // Comment-driven follow-ups (best-effort; never breaks the main loop).
+      if (cfg.followups.enabled && this.followupStore) {
+        try {
+          await this.checkFollowups();
+        } catch (err) {
+          this.logger.warn('followup_check_failed', { error: (err as Error).message });
+        }
       }
     } catch (err) {
       const le = err as LinearError;

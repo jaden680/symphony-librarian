@@ -24,6 +24,16 @@ const STATES = [
   { id: 's-done', name: 'Done', type: 'completed' },
 ];
 
+const VIEWER_ID = 'bot-viewer-1';
+
+interface StoredComment {
+  id: string;
+  body: string;
+  createdAt: string;
+  authorId: string;
+  issueId: string;
+}
+
 interface FakeServer {
   server: http.Server;
   port: number;
@@ -32,6 +42,9 @@ interface FakeServer {
   getComment(): string | null;
   getTransitions(): string[];
   reopen(): void;
+  getBotCommentCount(): number;
+  postHumanComment(body: string): void;
+  getBotCommentBodies(): string[];
 }
 
 function startFakeLinear(): Promise<FakeServer> {
@@ -43,6 +56,9 @@ function startFakeLinear(): Promise<FakeServer> {
   let movedStateId: string | null = null;
   let commentBody: string | null = null;
   const transitions: string[] = [];
+  const comments: StoredComment[] = [];
+  let commentSeq = 0;
+  const nowIso = () => new Date().toISOString();
 
   const issueNode = () => ({
     id: issue.id,
@@ -117,8 +133,40 @@ function startFakeLinear(): Promise<FakeServer> {
         const ids = (vars.ids as string[]) ?? [];
         const nodes = ids.includes(issue.id) ? [{ id: issue.id, state: { name: issue.state } }] : [];
         reply({ issues: { nodes } });
+      } else if (q.includes('SymphonyViewer')) {
+        reply({ viewer: { id: VIEWER_ID } });
+      } else if (q.includes('SymphonyIssueComments')) {
+        // Full thread of an issue (must be checked before the SymphonyComment* prefixes).
+        const id = String(vars.id);
+        const nodes = comments
+          .filter((c) => c.issueId === id)
+          .map((c) => ({ id: c.id, body: c.body, createdAt: c.createdAt, user: { id: c.authorId } }));
+        reply({ issue: { comments: { nodes } } });
+      } else if (q.includes('SymphonyComments')) {
+        // Comments created after `since` (server-side createdAt filter).
+        const since = String(vars.since);
+        const nodes = comments
+          .filter((c) => c.createdAt > since)
+          .map((c) => ({
+            id: c.id,
+            body: c.body,
+            createdAt: c.createdAt,
+            user: { id: c.authorId },
+            issue: {
+              id: c.issueId,
+              identifier: issue.identifier,
+              title: issueNode().title,
+              description: issueNode().description,
+              state: { name: issue.state },
+              team: { key: 'ZZ' },
+            },
+          }));
+        reply({ comments: { nodes } });
       } else if (q.includes('SymphonyComment')) {
+        // commentCreate mutation — record it as a BOT-authored comment (this is how
+        // the bot "answers", which is what makes later human replies follow-ups).
         commentBody = String(vars.body);
+        comments.push({ id: `bot-c${++commentSeq}`, body: commentBody, createdAt: nowIso(), authorId: VIEWER_ID, issueId: String(vars.issueId) });
         reply({ commentCreate: { success: true } });
       } else if (q.includes('SymphonyMove')) {
         const sid = String(vars.stateId);
@@ -145,6 +193,11 @@ function startFakeLinear(): Promise<FakeServer> {
         getTransitions: () => transitions,
         reopen: () => {
           issue.state = 'Todo';
+        },
+        getBotCommentCount: () => comments.filter((c) => c.authorId === VIEWER_ID).length,
+        getBotCommentBodies: () => comments.filter((c) => c.authorId === VIEWER_ID).map((c) => c.body),
+        postHumanComment: (body: string) => {
+          comments.push({ id: `human-c${++commentSeq}`, body, createdAt: nowIso(), authorId: 'human-1', issueId: issue.id });
         },
       });
     });
@@ -185,7 +238,9 @@ async function main(): Promise<void> {
   fs.writeFileSync(
     agentScript,
     [
-      'cat > .prompt_received.txt',
+      // Latest prompt → .prompt_received.txt; every prompt also appended to
+      // .prompts_all.txt so multi-run flows (follow-up, reopen) stay inspectable.
+      'tee .prompt_received.txt >> .prompts_all.txt',
       `echo '{"type":"agent","status":"running"}'`,
       `printf '## 질문 요약\\nAuth question\\n## 결론\\nValidated in middleware\\n## 불확실하거나 추가 확인이 필요한 부분\\n- Airbridge mapping rule\\n' > answer.md`,
       `echo '{"type":"agent","status":"completed"}'`,
@@ -259,6 +314,9 @@ curation:
   queue_path: ${path.join(tmp, '.symphony/curation_queue.jsonl')}
   auto_drain_interval_sec: 2
   librarian_path: ${librarianPath}
+followups:
+  enabled: true
+  state_path: ${path.join(tmp, '.symphony/followups.json')}
 agent:
   max_concurrent_agents: 1
   stall_timeout_ms: 60000
@@ -302,6 +360,11 @@ Search the codebase and ./wiki (if present). Write your answer to answer.md.
       fs.existsSync(draftNote), // in-process drain wrote the curated note
     25_000,
   );
+
+  // --- follow-up: a teammate replies on the already-answered issue ---
+  const botCommentsBefore = fake.getBotCommentCount();
+  fake.postHumanComment('이 토큰 만료되면 어떻게 갱신돼?');
+  const followedUp = await waitFor(() => fake.getBotCommentCount() > botCommentsBefore, 15_000);
 
   // --- auto-reopen: move ZZ-1 back to Todo, expect a second dispatch ---
   const dispatchCount = () =>
@@ -351,6 +414,19 @@ Search the codebase and ./wiki (if present). Write your answer to answer.md.
   // auto-reopen: moving a completed issue back to an active state re-dispatches it.
   check(reopened, 'expected ZZ-1 to be re-dispatched after being moved back to Todo');
   check(has('issue_reopened'), 'expected an issue_reopened event');
+  // comment-driven follow-up: a human reply on an answered issue gets an extra answer.
+  check(followedUp, 'expected a follow-up answer comment after a human reply');
+  check(has('followup_dispatched'), 'expected a followup_dispatched event');
+  check(has('followup_answered'), 'expected a followup_answered event');
+  const allPrompts = fs.existsSync(path.join(wsPath, '.prompts_all.txt'))
+    ? fs.readFileSync(path.join(wsPath, '.prompts_all.txt'), 'utf8')
+    : '';
+  check(allPrompts.includes('[FOLLOW-UP]'), 'follow-up prompt should be marked [FOLLOW-UP]');
+  check(allPrompts.includes('만료'), 'follow-up prompt should inject the latest human comment');
+  check(
+    allPrompts.includes('Validated in middleware'),
+    'follow-up prompt should inject the prior comment thread (the bot answer)',
+  );
   // v2: the answer's gap was auto-enqueued into the curation queue.
   check(has('gap_enqueued'), 'expected the answer gap to be auto-enqueued (gap_enqueued)');
   const queueFile = path.join(tmp, '.symphony/curation_queue.jsonl');
@@ -368,10 +444,12 @@ Search the codebase and ./wiki (if present). Write your answer to answer.md.
     (fake.getComment() ?? '').includes('Validated in middleware'),
     'posted comment should contain the answer.md content',
   );
-  // The comment should also report the curation enqueue (footer + the queued gap).
+  // Some posted comment must report the curation enqueue (footer + the queued gap).
+  // (Asserted across all bot comments, not just the last: by the time the reopen
+  // re-answers, the gap is already curated, so its footer won't re-list it.)
   check(
-    (fake.getComment() ?? '').includes('지식 큐레이션') && (fake.getComment() ?? '').includes('Airbridge mapping rule'),
-    'posted comment should include the curation footer with the enqueued gap',
+    fake.getBotCommentBodies().some((b) => b.includes('지식 큐레이션') && b.includes('Airbridge mapping rule')),
+    'a posted comment should include the curation footer with the enqueued gap',
   );
   // Secret redaction: the API key must never appear in any emitted log line.
   const leaked = records.some((r) => JSON.stringify(r).includes(API_KEY));

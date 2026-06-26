@@ -168,6 +168,26 @@ global settings, making each run a bit heavier. For lean, codebase-only runs,
 remove `--setting-sources user` and the `mcp__claude_ai_Slack__*` entries from
 `claude.command`.
 
+### Comment-driven follow-ups (optional)
+
+When `followups.enabled: true` (and `post_answer_comment: true`), a teammate can
+just **reply on the issue** and Symphony answers the follow-up — no need to reopen
+the ticket. There is no webhook or tunnel: Symphony polls for comments created
+since its last check (cheap — scales with comment volume, not ticket count), and
+treats a comment as a follow-up when it's by a human (not the bot) on an issue the
+bot has previously commented on.
+
+Each follow-up runs as a **fresh agent session**, so the entire Linear comment
+thread (the bot's prior answers + the human replies) is reconstructed and injected
+into the prompt as context. The agent writes an *additional* answer that builds on
+the prior one and addresses the latest comment, then posts it as a new comment.
+Answered comment ids and the last-checked timestamp persist to
+`followups.state_path`, so a restart never re-answers old comments.
+
+> Note: the `comments(filter: { createdAt: { gt: ... } })` query is verified against
+> the offline test fake; confirm it against your live Linear workspace. The poll
+> fails gracefully (logged as `followup_check_failed`) and retries next tick.
+
 ### Config reference
 
 | Key | Default | Notes |
@@ -199,10 +219,15 @@ remove `--setting-sources user` and the `mcp__claude_ai_Slack__*` entries from
 | `hooks.after_run` | — | After each attempt; failure logged & ignored. |
 | `hooks.timeout_ms` | `60000` | Applies to all hooks. |
 | `hooks.env_passthrough` | `[]` | Extra env var names forwarded to hooks (base env is an allow-list). |
+| `tracker.reopen_grace_sec` | `30` | After completion, wait this long before re-dispatching an issue moved back to an active state (covers done-state propagation lag). |
+| `followups.enabled` | `false` | Answer new human comments on issues the bot already answered. Polls comments (no webhook). Requires `post_answer_comment: true`. |
+| `followups.state_path` | `.symphony/followups.json` | Persists the last-checked timestamp + answered comment ids across restarts. |
 
 Changes to `WORKFLOW.md` are **picked up live** (file watch) — polling cadence,
 concurrency, states, hooks, and the prompt for future runs all re-apply without a
 restart. An invalid edit is rejected and the last good config keeps running.
+(Exception: turning `followups.enabled` from off → on needs a restart, since the
+follow-up state is initialized at startup.)
 
 ---
 

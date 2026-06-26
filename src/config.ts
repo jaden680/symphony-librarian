@@ -126,6 +126,7 @@ export function loadConfig(workflowPath: string): EffectiveConfig {
   const polling = asObject(cfg.polling);
   const hooks = asObject(cfg.hooks);
   const curation = asObject(cfg.curation);
+  const followups = asObject(cfg.followups);
 
   const workflowDir = path.dirname(abs);
 
@@ -181,6 +182,10 @@ export function loadConfig(workflowPath: string): EffectiveConfig {
       heavyLabels: asStringList(agent.heavy_labels, []).map((l) => l.toLowerCase()),
     },
     claude: { command },
+    followups: {
+      enabled: asBool(followups.enabled, false),
+      statePath: resolvePath(workflowDir, asString(followups.state_path, '.symphony/followups.json')),
+    },
     curation: {
       autoEnqueueGaps: asBool(curation.auto_enqueue_gaps, false),
       queuePath: resolvePath(workflowDir, asString(curation.queue_path, '.symphony/curation_queue.jsonl')),
